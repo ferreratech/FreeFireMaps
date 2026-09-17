@@ -1,0 +1,7 @@
+{
+  "name": "pdf-page",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.ts",
+  "description": "Local Expo module: render one PDF page (or a region of it) to a bitmap with Android's built-in PdfRenderer. No third-party native code."
+}
