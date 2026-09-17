@@ -32,7 +32,7 @@ if (mapKey('OtherMap.pdf') === k1) { ok = false; console.error('FAIL: distinct m
 const data = {
   pins: [
     { lat: 36.2072, lon: -121.9626 },
-    { lat: 36.3105, lon: -121.812 },
+    { lat: 36.3105, lon: -121.812, label: 'DP 3 — spot fire' },
   ],
   trace: [
     { lat: 36.25, lon: -121.9, t: 1757000000000 },

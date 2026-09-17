@@ -1,17 +1,19 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Image, LayoutChangeEvent, PixelRatio, StyleSheet, Text, View } from 'react-native';
 import * as FileSystem from 'expo-file-system';
-import Svg, { Circle, Polyline } from 'react-native-svg';
+import Svg, { Circle, Polygon, Polyline, Text as SvgText } from 'react-native-svg';
 import Animated, {
   runOnJS,
   SharedValue,
   useAnimatedProps,
+  useAnimatedReaction,
   useAnimatedStyle,
   useSharedValue,
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { GeoRef, latLonToPage, metersToPagePx, pageToLatLon } from '../lib/geopdf';
 import { Pin, TrackPoint } from '../lib/storage';
+import { niceScale, ScaleBar } from '../lib/grid';
 import { renderPage, renderRegion, RenderedPage } from '../modules/pdf-page';
 
 interface Props {
@@ -24,6 +26,16 @@ interface Props {
   onTapPin: (index: number) => void;
   /** Bumped by the parent's "Fit" button to recenter on demand (never automatic). */
   fitRequest?: number;
+  /** Compass heading, degrees true (null = unknown). Drawn as an arrow on the dot. */
+  heading?: number | null;
+  /** Keep the map centred on the GPS dot; any user pan/pinch reports back via onUserGesture. */
+  follow?: boolean;
+  onUserGesture?: () => void;
+  /** Measure mode: taps append points instead of hitting pins. */
+  measureMode?: boolean;
+  measurePts?: { lat: number; lon: number }[];
+  onMeasureTap?: (lat: number, lon: number) => void;
+  measureLabel?: string;
 }
 
 // GEOMETRY — one transform, one origin, no nesting.
@@ -117,7 +129,7 @@ function ScreenCircle({
 }
 
 /** The recorded trace: layer points (flat [x0,y0,x1,y1,...]) projected each frame. */
-function ScreenPolyline({ layerPts, xf }: { layerPts: number[]; xf: XF }) {
+function ScreenPolyline({ layerPts, xf, stroke = '#f97316', dashed = false }: { layerPts: number[]; xf: XF; stroke?: string; dashed?: boolean }) {
   const animatedProps = useAnimatedProps(() => {
     const s = xf.scale.value;
     const x0 = xf.tx.value;
@@ -132,8 +144,9 @@ function ScreenPolyline({ layerPts, xf }: { layerPts: number[]; xf: XF }) {
     <AnimatedPolyline
       animatedProps={animatedProps as any}
       fill="none"
-      stroke="#f97316"
+      stroke={stroke}
       strokeWidth={4}
+      strokeDasharray={dashed ? '10 8' : undefined}
       strokeLinejoin="round"
       strokeLinecap="round"
       opacity={0.9}
@@ -141,9 +154,57 @@ function ScreenPolyline({ layerPts, xf }: { layerPts: number[]; xf: XF }) {
   );
 }
 
+const AnimatedPolygon = Animated.createAnimatedComponent(Polygon);
+const AnimatedSvgText = Animated.createAnimatedComponent(SvgText);
+
+/** Heading arrow: a triangle just outside the dot, pointing along `heading`
+ *  (degrees true, screen-up = north — GeoPDF fire maps are north-up). */
+function ScreenHeading({ lx, ly, heading, xf }: { lx: number; ly: number; heading: SharedValue<number>; xf: XF }) {
+  const animatedProps = useAnimatedProps(() => {
+    const h = heading.value;
+    if (!(h >= 0)) return { points: '' };
+    const cx = xf.tx.value + xf.scale.value * lx;
+    const cy = xf.ty.value + xf.scale.value * ly;
+    const t = (h * Math.PI) / 180;
+    const dx = Math.sin(t), dy = -Math.cos(t);     // unit vector along heading
+    const px = -dy, py = dx;                        // perpendicular
+    const tipX = cx + 38 * dx, tipY = cy + 38 * dy;
+    const bX = cx + 16 * dx, bY = cy + 16 * dy;
+    return { points: `${tipX},${tipY} ${bX + 9 * px},${bY + 9 * py} ${bX - 9 * px},${bY - 9 * py}` };
+  });
+  return <AnimatedPolygon animatedProps={animatedProps as any} fill="#2563eb" stroke="#fff" strokeWidth={2} />;
+}
+
+/** A text label anchored at a layer point with a constant screen offset. */
+function ScreenText({ lx, ly, xf, text, dx = 12, dy = -12, fill = '#fff', size = 13 }: {
+  lx: number; ly: number; xf: XF; text: string; dx?: number; dy?: number; fill?: string; size?: number;
+}) {
+  const animatedProps = useAnimatedProps(() => ({
+    x: xf.tx.value + xf.scale.value * lx + dx,
+    y: xf.ty.value + xf.scale.value * ly + dy,
+  }));
+  // Halo: a black stroked copy underneath, the coloured fill on top (react-native-svg
+  // has no paint-order, so two texts).
+  return (
+    <>
+      <AnimatedSvgText animatedProps={animatedProps as any} fill="#000" stroke="#000" strokeWidth={4} fontSize={size} fontWeight="bold">
+        {text}
+      </AnimatedSvgText>
+      <AnimatedSvgText animatedProps={animatedProps as any} fill={fill} fontSize={size} fontWeight="bold">
+        {text}
+      </AnimatedSvgText>
+    </>
+  );
+}
+
 export default function MapViewer({
   fileUri, geo, location, pins, trace, onDropPin, onTapPin, fitRequest,
+  heading = null, follow = false, onUserGesture, measureMode = false, measurePts = [], onMeasureTap, measureLabel,
 }: Props) {
+  // Heading lives in a shared value so the arrow rotates on the UI thread.
+  const headingSV = useSharedValue(-1);
+  useEffect(() => { headingSV.value = heading === null || heading === undefined || Number.isNaN(heading) ? -1 : heading; }, [heading, headingSV]);
+  const [scaleBar, setScaleBar] = useState<ScaleBar | null>(null);
   const [viewport, setViewport] = useState({ w: 0, h: 0 });
   const [base, setBase] = useState<RenderedPage | null>(null);
   const [renderError, setRenderError] = useState<string | null>(null);
@@ -274,8 +335,16 @@ export default function MapViewer({
     onDropPin(lat, lon);
   };
 
-  // Tap a pin to remove it (hit-test in screen space).
+  // Tap: in measure mode append a point; otherwise hit-test pins (parent decides what to do).
   const handleTap = (vx: number, vy: number) => {
+    if (measureMode) {
+      if (!geo || !render || !onMeasureTap) return;
+      const lx = (vx - tx.value) / scale.value;
+      const ly = (vy - ty.value) / scale.value;
+      const [lat, lon] = pageToLatLon(geo, lx / render.q, ly / render.q);
+      onMeasureTap(lat, lon);
+      return;
+    }
     let best = -1;
     let bestD = 28;
     for (let i = 0; i < pins.length; i++) {
@@ -286,6 +355,32 @@ export default function MapViewer({
     }
     if (best >= 0) onTapPin(best);
   };
+
+  // --- follow-me: keep the dot at the viewport centre at the current zoom ---
+  const followKey = follow && location ? `${location.latitude},${location.longitude}` : '';
+  useEffect(() => {
+    if (!follow || !location || !render || !viewport.w) return;
+    const L = toLayer(location.latitude, location.longitude);
+    if (!L) return;
+    tx.value = viewport.w / 2 - scale.value * L[0];
+    ty.value = viewport.h / 2 - scale.value * L[1];
+    requestTileRef.current?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [followKey, follow, render, viewport]);
+
+  // --- scale bar: recomputed from the live zoom on every frame, cheap ---
+  const metersPerLayerDp = useMemo(() => {
+    if (!geo || !render) return 0;
+    const pagePxPerMeter = metersToPagePx(geo, 1);
+    return pagePxPerMeter > 0 ? 1 / (pagePxPerMeter * render.q) : 0;
+  }, [geo, render]);
+  const updateScaleBar = (s: number) => {
+    if (!metersPerLayerDp) { setScaleBar(null); return; }
+    const sb = niceScale(metersPerLayerDp / s, 140);
+    setScaleBar((prev) => (prev && sb && prev.label === sb.label && Math.abs(prev.px - sb.px) < 1 ? prev : sb));
+  };
+  useAnimatedReaction(() => scale.value, (s, prev) => { if (s !== prev) runOnJS(updateScaleBar)(s); }, [metersPerLayerDp]);
+  useEffect(() => { updateScaleBar(scale.value); }, [metersPerLayerDp]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- sharp tile: re-render the visible page rect at screen density (JS thread) ---
   const oldTileUris = useRef<string[]>([]);
@@ -348,6 +443,8 @@ export default function MapViewer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [base, render, viewport, fileUri]);
 
+  const requestTileRef = useRef<(() => void) | null>(null);
+  requestTileRef.current = requestTile;
   // A fresh base (new file / first render) invalidates any tile; refit triggers a tile check.
   useEffect(() => { requestTile(); }, [requestTile, fitRequest]);
 
@@ -401,6 +498,7 @@ export default function MapViewer({
     .averageTouches(true)
     .onStart(() => {
       runOnJS(lpCancel)();
+      if (onUserGesture) runOnJS(onUserGesture)(); // a real pan turns follow-me off
       gPanRawX.value = 0;
       gPanRawY.value = 0;
       rebase(gFocalX.value, gFocalY.value);
@@ -422,7 +520,7 @@ export default function MapViewer({
     });
 
   const pinch = Gesture.Pinch()
-    .onBegin(() => { interacted.value = true; })
+    .onBegin(() => { interacted.value = true; if (onUserGesture) runOnJS(onUserGesture)(); })
     .onStart((e) => {
       // Anchor at the fingers' midpoint. Any pan already in progress is folded
       // into the base by rebase(), so its later deltas start from zero here.
@@ -481,6 +579,12 @@ export default function MapViewer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [pins, geo, render],
   );
+  const measureLayer = useMemo(
+    () => measurePts.map((p) => toLayer(p.lat, p.lon)).filter((L): L is [number, number] => !!L),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [measurePts, geo, render],
+  );
+  const measureFlat = useMemo(() => measureLayer.flatMap((L) => [L[0], L[1]]), [measureLayer]);
 
   return (
     <View style={styles.fill} onLayout={onLayout}>
@@ -539,11 +643,19 @@ export default function MapViewer({
           pointerEvents="none"
         >
           {traceLayer.length >= 4 && <ScreenPolyline layerPts={traceLayer} xf={xf} />}
+          {measureFlat.length >= 4 && <ScreenPolyline layerPts={measureFlat} xf={xf} stroke="#22d3ee" dashed />}
+          {measureLayer.map((L, i) => (
+            <ScreenCircle key={`m${i}`} lx={L[0]} ly={L[1]} r={6} xf={xf} fill="#22d3ee" stroke="#000" strokeWidth={1.5} />
+          ))}
+          {measureLayer.length >= 2 && measureLabel && (
+            <ScreenText lx={measureLayer[measureLayer.length - 1][0]} ly={measureLayer[measureLayer.length - 1][1]} xf={xf} text={measureLabel} fill="#a5f3fc" />
+          )}
           {pinLayer.map((L, i) =>
             L ? (
               <React.Fragment key={i}>
                 <ScreenCircle lx={L[0]} ly={L[1]} r={9} xf={xf} fill="#dc2626" stroke="#fff" strokeWidth={2.5} />
                 <ScreenCircle lx={L[0]} ly={L[1]} r={2.5} xf={xf} fill="#fff" />
+                {pins[i].label ? <ScreenText lx={L[0]} ly={L[1]} xf={xf} text={pins[i].label as string} /> : null}
               </React.Fragment>
             ) : null,
           )}
@@ -557,11 +669,20 @@ export default function MapViewer({
             <>
               <ScreenCircle lx={dot.lx} ly={dot.ly} r={16} xf={xf} fill="rgba(37,99,235,0.18)" />
               <ScreenCircle lx={dot.lx} ly={dot.ly} r={7} xf={xf} fill="#2563eb" stroke="#fff" strokeWidth={2.5} />
+              <ScreenHeading lx={dot.lx} ly={dot.ly} heading={headingSV} xf={xf} />
             </>
           )}
         </Svg>
       )}
 
+      {scaleBar && (
+        <View style={[styles.scaleBox, { width: scaleBar.px + 16 }]} pointerEvents="none">
+          <Text style={styles.scaleLabel}>{scaleBar.label}  <Text style={styles.scaleMetric}>{scaleBar.metric}</Text></Text>
+          <View style={[styles.scaleLine, { width: scaleBar.px }]}>
+            <View style={styles.scaleTick} /><View style={styles.scaleTick} />
+          </View>
+        </View>
+      )}
       {!!status && (
         <View style={styles.statusBox} pointerEvents="none">
           <Text style={styles.statusText}>{status}</Text>
@@ -581,6 +702,12 @@ const styles = StyleSheet.create({
   fill: { flex: 1, width: '100%', height: '100%' },
   center: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
   hint: { color: '#aaa', fontSize: 14 },
-  statusBox: { position: 'absolute', left: 6, bottom: 6, backgroundColor: 'rgba(0,0,0,0.45)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
+  // Both sit just above the parent's control pills (2 rows + tip ≈ 130 dp).
+  scaleBox: { position: 'absolute', right: 8, bottom: 134, alignItems: 'flex-end', minWidth: 90 },
+  scaleLabel: { color: '#fff', fontSize: 12, fontWeight: '700', textShadowColor: '#000', textShadowRadius: 3 },
+  scaleMetric: { color: '#cbd5e1', fontSize: 10, fontWeight: '500' },
+  scaleLine: { height: 3, backgroundColor: '#fff', marginTop: 2, flexDirection: 'row', justifyContent: 'space-between', shadowColor: '#000' },
+  scaleTick: { width: 2, height: 9, backgroundColor: '#fff', marginTop: -6 },
+  statusBox: { position: 'absolute', left: 6, bottom: 134, backgroundColor: 'rgba(0,0,0,0.45)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
   statusText: { color: '#ddd', fontSize: 10, fontVariant: ['tabular-nums'] },
 });

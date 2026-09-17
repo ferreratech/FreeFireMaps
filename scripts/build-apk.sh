@@ -23,6 +23,9 @@ node scripts/verify-transform.mjs
 echo "→ verify persistence round-trip (pins/trace storage)"
 node scripts/verify-storage.mjs
 
+echo "→ verify grid math (USNG vs FGDC example, distance, scale bar)"
+node scripts/verify-grid.mjs
+
 # GATE: the SVG overlay must be viewport-sized and outside the zoom transform
 # (a page-sized overlay exceeds Android's single-bitmap limit and crashes).
 echo "→ verify overlay bounds (bitmap-size gate)"

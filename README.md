@@ -14,8 +14,15 @@ with no signal, no account, and no third-party PDF engine.
 - **Sharp at any zoom** — the page is rasterised with Android's built-in
   `PdfRenderer`; after every gesture the visible area is re-rendered at true
   screen density, so vector text stays crisp instead of being stretched.
-- **Pins and trace** — long-press to drop a pin, tap to remove, record a GPS
-  trace, save per map. Everything is stored as lat/lon so it survives reloads.
+- **Pins with notes and a trace** — long-press to drop a pin, tap it to add a
+  note ("DP 3") or remove it, record a GPS trace, save per map. Everything is
+  stored as lat/lon so it survives reloads.
+- **USNG / UTM readout + heading** — your position in the grid crews radio,
+  compass heading as an arrow on the dot, and a scale bar that stays correct at
+  any zoom.
+- **Follow-me** — keep the map centred on you; any pan turns it off.
+- **Measure** — tap points for distance (ft/mi and m/km) and bearing.
+- **Recent maps** — reopen the last dozen maps from the home screen.
 - **Open with…** — share any PDF to FreeFireMaps from Files, Drive, email or a
   browser download.
 - **Fully offline**, self-contained APK (Hermes bundle embedded, arm64).

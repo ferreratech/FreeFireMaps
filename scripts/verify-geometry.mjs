@@ -111,7 +111,19 @@ import { readFileSync } from 'node:fs';
   ok(pinchModelInSource, 'MapViewer pinch handler does not use the unified apply() model');
   // The concurrent model above assumes pan translation = midpoint motion. RNGH
   // only does that with averageTouches(true); its default tracks the last pointer.
-  ok(/Gesture\.Pan\(\)[\s\S]{0,600}\.averageTouches\(true\)/.test(readFileSync(new URL('../components/MapViewer.tsx', import.meta.url), 'utf8')), 'Pan must use averageTouches(true) or a symmetric pinch pans the map');
+  ok(/Gesture\.Pan\(\)[\s\S]{0,1200}\.averageTouches\(true\)/.test(readFileSync(new URL('../components/MapViewer.tsx', import.meta.url), 'utf8')), 'Pan must use averageTouches(true) or a symmetric pinch pans the map');
+  {
+    // RNGH builders: calling the same .onX() twice silently REPLACES the first
+    // callback. Assert each gesture chain sets every callback at most once.
+    const src2 = readFileSync(new URL('../components/MapViewer.tsx', import.meta.url), 'utf8');
+    for (const name of ['pan', 'pinch', 'tap']) {
+      const m = src2.match(new RegExp(`const ${name} = Gesture\\.[A-Za-z]+\\(\\)([\\s\\S]*?);\\n`));
+      if (!m) { ok(false, `gesture chain '${name}' not found`); continue; }
+      const calls = [...m[1].matchAll(/\.(on[A-Za-z]+)\(/g)].map((x) => x[1]);
+      const dup = calls.find((c, i) => calls.indexOf(c) !== i);
+      ok(!dup, `gesture '${name}' sets .${dup}() twice — the second silently replaces the first`);
+    }
+  }
   ok(!/tx\.value = startX\.value \+ e\.translationX/.test(readFileSync(new URL('../components/MapViewer.tsx', import.meta.url), 'utf8')), 'the v5 pan handler (private start state) is back');
 }
 

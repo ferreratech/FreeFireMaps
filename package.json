@@ -12,7 +12,10 @@
     "ios": "expo run:ios",
     "verify:native": "node scripts/verify-native-modules.mjs",
     "verify:storage": "node scripts/verify-storage.mjs",
-    "verify:overlay": "node scripts/verify-overlay-bounds.mjs"
+    "verify:overlay": "node scripts/verify-overlay-bounds.mjs",
+    "verify:grid": "node scripts/verify-grid.mjs",
+    "verify:geometry": "node scripts/verify-geometry.mjs",
+    "verify:renderer": "node scripts/verify-renderer.mjs"
   },
   "dependencies": {
     "expo": "~53.0.12",
