@@ -1,71 +1,68 @@
 # FreeFireMaps
 
-Offline georeferenced-PDF map viewer for Android, built for reading wildfire
-incident maps in the field. Open a GeoPDF (CAL FIRE / NIFC / USFS ops and IR
-maps, USGS topos), pan and zoom it, and see your GPS position on the page —
-with no signal, no account, and no third-party PDF engine.
+A free, offline map app for Android, built for wildland fire crews. Open an
+incident map (a GeoPDF from CAL FIRE, NIFC, USFS or USGS), and it shows where
+you are on it, with no cell signal and no account.
+
+Built with AI assistance (Claude). I designed the features around what I needed
+on the fireline.
+
+> **Not an official tool.** Always carry and confirm against your issued maps.
 
 <p align="center"><img src="assets/icon.png" width="128" alt="FreeFireMaps icon"></p>
 
-## Features
+## Why I built this
 
-- **GeoPDF georeference** — reads ISO 32000 `/Measure` + `/GPTS` (and the older
-  TerraGo `/LGIDict`), solves the page↔ground transform, and places you on the map.
-- **Sharp at any zoom** — the page is rasterised with Android's built-in
-  `PdfRenderer`; after every gesture the visible area is re-rendered at true
-  screen density, so vector text stays crisp instead of being stretched.
-- **Pins with notes and a trace** — long-press to drop a pin, tap it to add a
-  note ("DP 3") or remove it, record a GPS trace, save per map. Everything is
-  stored as lat/lon so it survives reloads.
-- **USNG / UTM readout + heading** — your position in the grid crews radio,
-  compass heading as an arrow on the dot, and a scale bar that stays correct at
-  any zoom.
-- **Follow-me** — keep the map centred on you; any pan turns it off.
-- **Measure** — tap points for distance (ft/mi and m/km) and bearing.
-- **Recent maps** — reopen the last dozen maps from the home screen.
-- **Open with…** — share any PDF to FreeFireMaps from Files, Drive, email or a
-  browser download.
-- **Fully offline**, self-contained APK (Hermes bundle embedded, arm64).
+I worked seven seasons in wildland fire. Avenza now costs money, and Ignis
+would often not work offline, which left the crew sharing one map from the guy
+who had paid. FreeFireMaps does one thing: open the incident map and show where
+you are, with no signal and no account.
 
-## Build
+## Screenshots
 
-Local, no EAS and no Expo account. Needs JDK 17 and an Android SDK
-(`~/.android-env` exports both here; see `scripts/build-apk.sh`).
+<p align="center">
+  <img src="docs/screenshots/overview.png" width="280" alt="A CAL FIRE incident map with a blue GPS dot inside the fire area and a USNG grid readout">
+  &nbsp;&nbsp;
+  <img src="docs/screenshots/zoomed.png" width="280" alt="Zoomed in on the same map: the GPS dot on a dozer line, with sharp map labels">
+</p>
 
-```sh
-npm install
-npm run build:apk            # -> dist-apk/freefiremaps-<version>-arm64.apk
-ABIS=all npm run build:apk   # universal (x86_64 for an emulator + arm64)
-```
+The real CAL FIRE Timber incident map with a simulated GPS position. Left: the
+whole map. Right: zoomed in about 10x, still sharp.
 
-`build:apk` runs a set of **behavioural gates** before and after gradle:
-georeference round-trip against a real CAL FIRE GeoPDF, persistence round-trip,
-overlay bitmap bounds, pan/zoom geometry (including concurrent pan + pinch),
-renderer wiring and tile math, native-module linkage, embedded-bundle and dex
-checks. The release build is signed with the debug keystore — fine for
-sideloading, not for the Play Store.
+## What it does
 
-## Layout
+- **Shows your position on the fire map.** Open the map PDF you were issued and
+  a dot shows where you are, using the phone's GPS. No internet needed.
+- **Stays sharp when you zoom.** Map text and lines stay crisp at any zoom.
+- **Pins with notes.** Long-press to drop a pin (for example "DP 3"), and record
+  the path you walked. Saved with each map.
+- **Grid readout.** Your position in USNG/UTM, the grid crews use on the radio,
+  plus a heading arrow and a scale bar.
+- **Follow-me** keeps the map centred on you.
+- **Measure** distance and bearing between points.
+- **Recent maps** on the home screen, and "Open with…" from Files, Drive, email
+  or a download.
 
-| path | what |
-|---|---|
-| `app/` | expo-router screens (`index.tsx` is the whole UI) |
-| `components/MapViewer.tsx` | render + gesture + overlay projection (one top-left-origin transform) |
-| `modules/pdf-page/` | local Expo module: `PdfRenderer` page + region rendering (Kotlin) |
-| `lib/geopdf.ts`, `lib/utm.ts`, `lib/affine.ts` | georeference parsing and projection |
-| `lib/storage.ts` | per-map pins/trace persistence |
-| `scripts/` | build script and gates |
-| `test-maps/` | a real CAL FIRE ops GeoPDF used by the gates |
+## Install
 
-## Testing on an emulator
+Download the APK from the [latest release](../../releases/latest) and open it on
+your phone (allow installs from your browser or file manager when asked). It
+runs on 64-bit Android phones, which is nearly all phones made since about 2017.
 
-An x86_64 API 34 emulator with KVM runs the universal build. Launch with a map
-via the PDF intent, inject GPS with `adb emu geo fix`, and drive two-finger
-pinches with `sendevent` on the virtio multitouch device (send `ABS_MT_PRESSURE`
-per slot or Android classifies the contact as hovering). The GPS dot's screen
-position before/after a pinch centred on it is the pass/fail signal.
+## How it works, in short
+
+A GeoPDF is a normal PDF map with a small hidden table inside it that says which
+points on the page match which spots on the ground. FreeFireMaps reads that
+table, works out the conversion between page and ground, and uses it to put your
+GPS position in the right place on the page. Everything happens on the phone, so
+it works with no signal.
+
+## For developers
+
+Build steps, the automated checks and the code layout are in
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## License
 
-MIT — see `LICENSE`. The Timber incident ops map in `test-maps/` is a public
-CAL FIRE document included for the build gates.
+MIT. See `LICENSE`. The Timber incident map in `test-maps/` is a public CAL FIRE
+document used for the automated checks.
